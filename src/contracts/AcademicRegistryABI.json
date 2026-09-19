@@ -1,0 +1,163 @@
+[
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "_uniWallet",
+                "type": "address"
+            },
+            {
+                "internalType": "string",
+                "name": "_uniName",
+                "type": "string"
+            }
+        ],
+        "name": "authorizeUniversity",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "_studentId",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "_hash",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "_ipfsCID",
+                "type": "string"
+            }
+        ],
+        "name": "issueTranscript",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "string",
+                "name": "sha256Hash",
+                "type": "string"
+            },
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "issuingUniversity",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "studentId",
+                "type": "string"
+            }
+        ],
+        "name": "TranscriptIssued",
+        "type": "event"
+    },
+    {
+        "anonymous": false,
+        "inputs": [
+            {
+                "indexed": true,
+                "internalType": "address",
+                "name": "uniWallet",
+                "type": "address"
+            },
+            {
+                "indexed": false,
+                "internalType": "string",
+                "name": "uniName",
+                "type": "string"
+            }
+        ],
+        "name": "UniversityAuthorized",
+        "type": "event"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "name": "authorizedUniversities",
+        "outputs": [
+            {
+                "internalType": "string",
+                "name": "",
+                "type": "string"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [],
+        "name": "owner",
+        "outputs": [
+            {
+                "internalType": "address",
+                "name": "",
+                "type": "address"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "internalType": "string",
+                "name": "_hash",
+                "type": "string"
+            }
+        ],
+        "name": "verifyTranscript",
+        "outputs": [
+            {
+                "internalType": "bool",
+                "name": "isValid",
+                "type": "bool"
+            },
+            {
+                "internalType": "string",
+                "name": "studentId",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "ipfsCID",
+                "type": "string"
+            },
+            {
+                "internalType": "string",
+                "name": "universityName",
+                "type": "string"
+            },
+            {
+                "internalType": "uint256",
+                "name": "timestamp",
+                "type": "uint256"
+            }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+    }
+]
