@@ -5,7 +5,7 @@ import AcademicRegistryABI from './contracts/AcademicRegistryABI.json';
 import { CONTRACT_ADDRESS } from './contracts/config';
 
 // ⚠️ Replace with your actual Pinata JWT token
-const PINATA_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiIzYmM4YWVhOS05MzU2LTQwM2UtYTk1MC00NjMzOGE4ZDJkYzYiLCJlbWFpbCI6InNoYXRha3NoaXNodWtsYTQ5QGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJwaW5fcG9saWN5Ijp7InJlZ2lvbnMiOlt7ImRlc2lyZWRSZXBsaWNhdGlvbkNvdW50IjoxLCJpZCI6IkZSQTEifSx7ImRlc2lyZWRSZXBsaWNhdGlvbkNvdW50IjoxLCJpZCI6Ik5ZQzEifV0sInZlcnNpb24iOjF9LCJtZmFfZW5hYmxlZCI6ZmFsc2UsInN0YXR1cyI6IkFDVElWRSJ9LCJhdXRoZW50aWNhdGlvblR5cGUiOiJzY29wZWRLZXkiLCJzY29wZWRLZXlLZXkiOiIxODZkMjViMzczZjI3NjcyN2JkMSIsInNjb3BlZEtleVNlY3JldCI6ImY3MTc5MzNmYWRiOGRiMjlhZTZhMTM1OGEwZjVhM2ZhMTM0NDRhZGRkYTVhZTE5NzNiYjZhMmU3Yjg1YzM3YzIiLCJleHAiOjE4MjE0NTE2NTV9.RV1WGGHjNHzZsQyJL5LYTP1Z29-XvwZTQLFRudzp5b4";
+const PINATA_JWT = import.meta.env.VITE_PINATA_JWT;
 
 function App() {
   const [activeTab, setActiveTab] = useState('issue');
@@ -242,12 +242,21 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#0F172A] via-[#1E293B] to-[#0F172A] text-white flex flex-col justify-between font-sans">
-      {/* Top Bar for Wallet Connection */}
+      {/* Top Bar for Wallet Connection & Brand Logo */}
       <header className="max-w-6xl w-full mx-auto px-6 py-6 flex justify-between items-center">
-        <div className="text-xl font-bold tracking-tight text-white flex items-center space-x-2">
-          <span className="h-3 w-3 bg-cyan-400 rounded-full animate-pulse"></span>
-          <span>VaultScript</span>
+        <div className="flex items-center space-x-3 cursor-pointer select-none">
+          {/* Glowing Indicator Dot */}
+          <span className="relative flex h-3.5 w-3.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-cyan-500"></span>
+          </span>
+
+          {/* Prominent Company Brand Heading */}
+          <span className="text-2xl sm:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-100 to-cyan-300 bg-clip-text text-transparent">
+            VaultScript
+          </span>
         </div>
+
         <div>
           {!account ? (
             <button
