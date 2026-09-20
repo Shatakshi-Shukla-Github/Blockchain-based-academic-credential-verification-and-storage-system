@@ -13,11 +13,11 @@ function App() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // --- Issue Form States ---
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [studentAddress, setStudentAddress] = useState('');
-  const [fileHash, setFileHash] = useState('');
-  const [ipfsCid, setIpfsCid] = useState('');
+  // --- Multi-File Issue Form States ---
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [studentIdsInput, setStudentIdsInput] = useState('');
+  const [processedHashes, setProcessedHashes] = useState([]);
+  const [batchStatus, setBatchStatus] = useState([]);
   const [status, setStatus] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
@@ -90,27 +90,36 @@ function App() {
     }
   };
 
-  const handleFileChange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    setSelectedFile(file);
-    setStatus('Computing cryptographic hash...');
-
+  // Helper to compute SHA-256 for a file
+  const computeSHA256 = async (file) => {
     const arrayBuffer = await file.arrayBuffer();
     const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = '0x' + hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-    setFileHash(hashHex);
-    setStatus('Hash calculated successfully!');
+    return '0x' + hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   };
 
-  const uploadToIPFS = async () => {
-    if (!selectedFile) throw new Error('No file selected.');
+  // 1. Handle Multiple File Selection
+  const handleMultipleFilesChange = async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
 
+    setSelectedFiles(files);
+    setStatus(`Computing SHA-256 hashes for ${files.length} file(s)...`);
+
+    const hashes = [];
+    for (let file of files) {
+      const hashHex = await computeSHA256(file);
+      hashes.push({ name: file.name, hash: hashHex });
+    }
+
+    setProcessedHashes(hashes);
+    setStatus(`Calculated hashes for ${files.length} document(s).`);
+  };
+
+  // 2. Upload single file to Pinata IPFS
+  const uploadToIPFS = async (file) => {
     const formData = new FormData();
-    formData.append('file', selectedFile);
+    formData.append('file', file);
 
     const res = await axios.post(
       'https://api.pinata.cloud/pinning/pinFileToIPFS',
@@ -126,34 +135,62 @@ function App() {
     return res.data.IpfsHash;
   };
 
-  const handleIssueTranscript = async (e) => {
+  // 3. Batch Issue Loop
+  const handleIssueBatchTranscripts = async (e) => {
     e.preventDefault();
-    if (!fileHash || !studentAddress || !selectedFile) {
-      alert('Please fill out all fields and select a transcript PDF.');
+    if (selectedFiles.length === 0) {
+      alert('Please select at least one transcript PDF.');
+      return;
+    }
+
+    // Split student IDs by comma or newline
+    const studentIds = studentIdsInput
+      .split(/[\n,]+/)
+      .map(id => id.trim())
+      .filter(id => id.length > 0);
+
+    if (studentIds.length !== selectedFiles.length) {
+      alert(`Mismatch: You selected ${selectedFiles.length} file(s) but entered ${studentIds.length} Student ID(s). Please provide one ID per file.`);
       return;
     }
 
     try {
       setIsLoading(true);
-      setStatus('Uploading transcript to IPFS...');
-
-      const cid = await uploadToIPFS();
-      setIpfsCid(cid);
-      setStatus(`Pinned to IPFS (CID: ${cid}). Prompting wallet transaction...`);
+      setBatchStatus([]);
 
       const provider = new ethers.BrowserProvider(window.ethereum);
       const signer = await provider.getSigner();
       const contract = new ethers.Contract(CONTRACT_ADDRESS, AcademicRegistryABI, signer);
 
-      const tx = await contract.issueTranscript(studentAddress, fileHash, cid);
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const file = selectedFiles[i];
+        const studentId = studentIds[i];
+        const fileHash = processedHashes[i].hash;
 
-      setStatus(`Transaction submitted! Hash: ${tx.hash}. Awaiting confirmation...`);
-      await tx.wait();
+        setStatus(`[${i + 1}/${selectedFiles.length}] Uploading ${file.name} to IPFS...`);
 
-      setStatus('✅ Transcript successfully registered on-chain!');
+        // Step A: Upload file to Pinata
+        const cid = await uploadToIPFS(file);
+
+        setStatus(`[${i + 1}/${selectedFiles.length}] Pinned to IPFS (CID: ${cid}). Confirm transaction in MetaMask...`);
+
+        // Step B: Submit on-chain transaction
+        const tx = await contract.issueTranscript(studentId, fileHash, cid);
+        setStatus(`[${i + 1}/${selectedFiles.length}] Transaction submitted! Hash: ${tx.hash.slice(0, 10)}... Awaiting block confirmation...`);
+
+        await tx.wait();
+
+        // Update batch results
+        setBatchStatus(prev => [
+          ...prev,
+          { name: file.name, studentId, hash: fileHash, cid, txHash: tx.hash, status: 'Success' }
+        ]);
+      }
+
+      setStatus(`✅ Batch complete! Successfully registered ${selectedFiles.length} transcript(s) on-chain.`);
     } catch (error) {
-      console.error('Error issuing transcript:', error);
-      setStatus(`❌ Error: ${error.reason || error.message || 'Transaction failed.'}`);
+      console.error('Error in batch issuance:', error);
+      setStatus(`❌ Error during batch operation: ${error.reason || error.message || 'Transaction failed.'}`);
     } finally {
       setIsLoading(false);
     }
@@ -164,11 +201,7 @@ function App() {
     if (!file) return;
 
     setVerifyFile(file);
-    const arrayBuffer = await file.arrayBuffer();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = '0x' + hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
+    const hashHex = await computeSHA256(file);
     setVerifyHashInput(hashHex);
   };
 
@@ -232,13 +265,13 @@ function App() {
         </div>
       </header>
 
-      {/* Hero Header matching screenshot typography */}
+      {/* Hero Header */}
       <main className="max-w-5xl w-full mx-auto px-6 py-8 text-center flex-1 flex flex-col justify-center items-center">
         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold text-white tracking-tight leading-[1.1] mb-12 max-w-4xl">
           Instant Academic Credential Verification And Storage
         </h1>
 
-        {/* Action Buttons matching screenshot design */}
+        {/* Action Toggle Buttons */}
         <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mb-12 w-full max-w-2xl">
           <button
             onClick={() => setActiveTab('issue')}
@@ -283,38 +316,48 @@ function App() {
                   </button>
                 </div>
               ) : (
-                <form onSubmit={handleIssueTranscript} className="space-y-5">
+                <form onSubmit={handleIssueBatchTranscripts} className="space-y-5">
                   <div>
                     <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                      Student ID or Address:
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="STU-12345 or 0x..."
-                      value={studentAddress}
-                      onChange={(e) => setStudentAddress(e.target.value)}
-                      className="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                      Select Transcript Document (PDF):
+                      Select Transcript Document(s) (PDF) - Multiple Allowed:
                     </label>
                     <input
                       type="file"
                       accept="application/pdf"
-                      onChange={handleFileChange}
+                      multiple
+                      onChange={handleMultipleFilesChange}
                       className="w-full bg-slate-800/80 border border-slate-700 rounded-xl p-2.5 text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-700 file:text-cyan-300 hover:file:bg-slate-600 cursor-pointer"
                       required
                     />
                   </div>
 
-                  {fileHash && (
-                    <div className="p-3 bg-slate-800/90 border border-slate-700 rounded-xl text-xs space-y-1">
-                      <span className="text-slate-400 block font-semibold">Computed SHA-256 Hash:</span>
-                      <span className="font-mono text-cyan-300 break-all">{fileHash}</span>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                      Student ID(s) or Address(es) (Separate with commas or newlines):
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="e.g. STU-001, STU-002, STU-003"
+                      value={studentIdsInput}
+                      onChange={(e) => setStudentIdsInput(e.target.value)}
+                      className="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+                      required
+                    />
+                    <span className="text-[11px] text-slate-500 block mt-1">
+                      Enter IDs in the exact order matching your selected PDF files.
+                    </span>
+                  </div>
+
+                  {/* Hash Preview List */}
+                  {processedHashes.length > 0 && (
+                    <div className="p-3 bg-slate-800/90 border border-slate-700 rounded-xl text-xs space-y-2 max-h-40 overflow-y-auto">
+                      <span className="text-slate-400 block font-semibold">Computed Cryptographic Hashes ({processedHashes.length}):</span>
+                      {processedHashes.map((item, idx) => (
+                        <div key={idx} className="border-b border-slate-700/50 pb-1">
+                          <span className="text-slate-300 font-semibold">{item.name}: </span>
+                          <span className="font-mono text-cyan-300 break-all">{item.hash}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
 
@@ -323,25 +366,25 @@ function App() {
                     disabled={isLoading}
                     className="w-full py-4 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-base rounded-xl transition-all shadow-lg shadow-cyan-500/20 disabled:opacity-50"
                   >
-                    {isLoading ? 'Processing...' : 'Issue Transcript On-Chain'}
+                    {isLoading ? 'Processing Pipeline...' : `Issue ${selectedFiles.length > 1 ? selectedFiles.length + ' Transcripts' : 'Transcript'} On-Chain`}
                   </button>
 
                   {status && (
                     <div className="p-4 bg-slate-800/90 border border-slate-700 rounded-xl text-xs text-slate-300 space-y-2">
-                      <p className="font-semibold">{status}</p>
-                      {ipfsCid && (
-                        <p className="break-all pt-1 border-t border-slate-700">
-                          <span className="text-slate-400">IPFS Gateway Link: </span>
-                          <a
-                            href={`https://gateway.pinata.cloud/ipfs/${ipfsCid}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-cyan-300 hover:underline"
-                          >
-                            View Document on IPFS
-                          </a>
-                        </p>
-                      )}
+                      <p className="font-semibold text-cyan-300">{status}</p>
+                    </div>
+                  )}
+
+                  {/* Completed Transcripts Summary */}
+                  {batchStatus.length > 0 && (
+                    <div className="p-4 bg-slate-800/90 border border-emerald-500/40 rounded-xl text-xs space-y-3 mt-4">
+                      <h4 className="font-bold text-emerald-400 text-sm">Processed Transcripts ({batchStatus.length})</h4>
+                      {batchStatus.map((item, idx) => (
+                        <div key={idx} className="border-b border-slate-700 pb-2 space-y-0.5">
+                          <p className="text-white font-semibold">{item.name} &rarr; <span className="text-cyan-300">{item.studentId}</span></p>
+                          <p className="text-slate-400 break-all">IPFS CID: <a href={`https://gateway.pinata.cloud/ipfs/${item.cid}`} target="_blank" rel="noreferrer" className="text-cyan-300 underline">{item.cid}</a></p>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </form>
@@ -440,9 +483,6 @@ export default App;
 
 
 
-
-
-
 // import { useState } from 'react';
 // import { ethers } from 'ethers';
 // import axios from 'axios';
@@ -453,7 +493,7 @@ export default App;
 // const PINATA_JWT = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtYXRpb24iOnsiaWQiOiIzYmM4YWVhOS05MzU2LTQwM2UtYTk1MC00NjMzOGE4ZDJkYzYiLCJlbWFpbCI6InNoYXRha3NoaXNodWtsYTQ5QGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJwaW5fcG9saWN5Ijp7InJlZ2lvbnMiOlt7ImRlc2lyZWRSZXBsaWNhdGlvbkNvdW50IjoxLCJpZCI6IkZSQTEifSx7ImRlc2lyZWRSZXBsaWNhdGlvbkNvdW50IjoxLCJpZCI6Ik5ZQzEifV0sInZlcnNpb24iOjF9LCJtZmFfZW5hYmxlZCI6ZmFsc2UsInN0YXR1cyI6IkFDVElWRSJ9LCJhdXRoZW50aWNhdGlvblR5cGUiOiJzY29wZWRLZXkiLCJzY29wZWRLZXlLZXkiOiIxODZkMjViMzczZjI3NjcyN2JkMSIsInNjb3BlZEtleVNlY3JldCI6ImY3MTc5MzNmYWRiOGRiMjlhZTZhMTM1OGEwZjVhM2ZhMTM0NDRhZGRkYTVhZTE5NzNiYjZhMmU3Yjg1YzM3YzIiLCJleHAiOjE4MjE0NTE2NTV9.RV1WGGHjNHzZsQyJL5LYTP1Z29-XvwZTQLFRudzp5b4";
 
 // function App() {
-//   const [activeTab, setActiveTab] = useState('issue'); // 'issue' or 'verify'
+//   const [activeTab, setActiveTab] = useState('issue');
 //   const [account, setAccount] = useState('');
 //   const [isConnecting, setIsConnecting] = useState(false);
 //   const [errorMessage, setErrorMessage] = useState('');
@@ -472,7 +512,6 @@ export default App;
 //   const [verifyResult, setVerifyResult] = useState(null);
 //   const [isVerifying, setIsVerifying] = useState(false);
 
-//   // Helper to switch network to Sepolia
 //   const switchToSepolia = async () => {
 //     try {
 //       await window.ethereum.request({
@@ -504,7 +543,6 @@ export default App;
 //     }
 //   };
 
-//   // Connect MetaMask
 //   const connectWallet = async () => {
 //     if (!window.ethereum) {
 //       setErrorMessage('MetaMask is not installed.');
@@ -537,7 +575,6 @@ export default App;
 //     }
 //   };
 
-//   // 1. Calculate SHA-256 Hash for Issuance
 //   const handleFileChange = async (e) => {
 //     const file = e.target.files[0];
 //     if (!file) return;
@@ -554,7 +591,6 @@ export default App;
 //     setStatus('Hash calculated successfully!');
 //   };
 
-//   // 2. Upload PDF to Pinata IPFS
 //   const uploadToIPFS = async () => {
 //     if (!selectedFile) throw new Error('No file selected.');
 
@@ -575,7 +611,6 @@ export default App;
 //     return res.data.IpfsHash;
 //   };
 
-//   // 3. Store Record On-Chain
 //   const handleIssueTranscript = async (e) => {
 //     e.preventDefault();
 //     if (!fileHash || !studentAddress || !selectedFile) {
@@ -609,7 +644,6 @@ export default App;
 //     }
 //   };
 
-//   // 4. Calculate SHA-256 Hash for Verification File
 //   const handleVerifyFileChange = async (e) => {
 //     const file = e.target.files[0];
 //     if (!file) return;
@@ -623,7 +657,6 @@ export default App;
 //     setVerifyHashInput(hashHex);
 //   };
 
-//   // 5. Query Smart Contract to Verify Transcript
 //   const handleVerifyTranscript = async (e) => {
 //     e.preventDefault();
 //     if (!verifyHashInput) {
@@ -635,14 +668,11 @@ export default App;
 //       setIsVerifying(true);
 //       setVerifyResult(null);
 
-//       // Provider fallback (works even if user is not connected via MetaMask)
 //       const provider = window.ethereum
 //         ? new ethers.BrowserProvider(window.ethereum)
 //         : new ethers.JsonRpcProvider("https://rpc.sepolia.org");
 
 //       const contract = new ethers.Contract(CONTRACT_ADDRESS, AcademicRegistryABI, provider);
-
-//       // Call view function verifyTranscript(string _hash)
 //       const result = await contract.verifyTranscript(verifyHashInput);
 
 //       setVerifyResult({
@@ -663,183 +693,228 @@ export default App;
 //   };
 
 //   return (
-//     <div style={{ padding: '2rem', fontFamily: 'sans-serif', maxWidth: '650px', margin: '0 auto' }}>
-//       <h1>VaultScript Portal</h1>
-//       <p>Decentralized Academic Transcript Verification System</p>
-
-//       {/* Navigation Tabs */}
-//       <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', borderBottom: '2px solid #ddd', paddingBottom: '0.5rem' }}>
-//         <button
-//           onClick={() => setActiveTab('issue')}
-//           style={{
-//             padding: '0.5rem 1rem',
-//             fontSize: '1rem',
-//             fontWeight: activeTab === 'issue' ? 'bold' : 'normal',
-//             border: 'none',
-//             borderBottom: activeTab === 'issue' ? '3px solid #0066cc' : 'none',
-//             background: 'none',
-//             cursor: 'pointer'
-//           }}
-//         >
-//           University Admin (Issue)
-//         </button>
-//         <button
-//           onClick={() => setActiveTab('verify')}
-//           style={{
-//             padding: '0.5rem 1rem',
-//             fontSize: '1rem',
-//             fontWeight: activeTab === 'verify' ? 'bold' : 'normal',
-//             border: 'none',
-//             borderBottom: activeTab === 'verify' ? '3px solid #0066cc' : 'none',
-//             background: 'none',
-//             cursor: 'pointer'
-//           }}
-//         >
-//           Public Verification
-//         </button>
-//       </div>
-
-//       {errorMessage && (
-//         <div style={{ color: 'red', marginBottom: '1rem', padding: '0.5rem', border: '1px solid red', borderRadius: '4px' }}>
-//           {errorMessage}
+//     <div className="min-h-screen bg-gradient-to-b from-[#0F172A] via-[#1E293B] to-[#0F172A] text-white flex flex-col justify-between font-sans">
+//       {/* Top Bar for Wallet Connection */}
+//       <header className="max-w-6xl w-full mx-auto px-6 py-6 flex justify-between items-center">
+//         <div className="text-xl font-bold tracking-tight text-white flex items-center space-x-2">
+//           <span className="h-3 w-3 bg-cyan-400 rounded-full animate-pulse"></span>
+//           <span>VaultScript</span>
 //         </div>
-//       )}
-
-//       {/* TAB 1: ISSUANCE PORTAL */}
-//       {activeTab === 'issue' && (
 //         <div>
 //           {!account ? (
 //             <button
 //               onClick={connectWallet}
 //               disabled={isConnecting}
-//               style={{ padding: '0.75rem 1.5rem', fontSize: '1rem', cursor: 'pointer' }}
+//               className="px-6 py-2.5 bg-white text-[#0F172A] font-semibold text-sm rounded-full hover:bg-slate-200 transition-all shadow-md"
 //             >
 //               {isConnecting ? 'Connecting...' : 'Connect MetaMask Wallet'}
 //             </button>
 //           ) : (
+//             <div className="px-4 py-2 bg-slate-800/80 border border-slate-700 rounded-full text-xs font-mono text-cyan-300">
+//               ✓ {account.slice(0, 6)}...{account.slice(-4)}
+//             </div>
+//           )}
+//         </div>
+//       </header>
+
+//       {/* Hero Header matching screenshot typography */}
+//       <main className="max-w-5xl w-full mx-auto px-6 py-8 text-center flex-1 flex flex-col justify-center items-center">
+//         <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold text-white tracking-tight leading-[1.1] mb-12 max-w-4xl">
+//           Instant Academic Credential Verification And Storage
+//         </h1>
+
+//         {/* Action Buttons matching screenshot design */}
+//         <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mb-12 w-full max-w-2xl">
+//           <button
+//             onClick={() => setActiveTab('issue')}
+//             className={`w-full sm:w-72 py-5 px-8 rounded-2xl font-bold text-lg sm:text-xl transition-all duration-300 shadow-xl ${activeTab === 'issue'
+//               ? 'bg-[#FFFFF0] text-[#0F172A] scale-105 shadow-cyan-500/10'
+//               : 'bg-slate-800/60 text-slate-300 hover:bg-slate-800 border border-slate-700'
+//               }`}
+//           >
+//             Issue Transcript
+//           </button>
+//           <button
+//             onClick={() => setActiveTab('verify')}
+//             className={`w-full sm:w-72 py-5 px-8 rounded-2xl font-bold text-lg sm:text-xl transition-all duration-300 shadow-xl ${activeTab === 'verify'
+//               ? 'bg-[#FFFFF0] text-[#0F172A] scale-105 shadow-cyan-500/10'
+//               : 'bg-slate-800/60 text-slate-300 hover:bg-slate-800 border border-slate-700'
+//               }`}
+//           >
+//             Public Verifier
+//           </button>
+//         </div>
+
+//         {/* Error Alert */}
+//         {errorMessage && (
+//           <div className="max-w-xl w-full mb-6 p-4 bg-red-900/50 border border-red-500 text-red-200 text-sm rounded-xl">
+//             {errorMessage}
+//           </div>
+//         )}
+
+//         {/* Form Container */}
+//         <div className="w-full max-w-2xl text-left bg-slate-900/70 backdrop-blur-md border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
+//           {/* TAB 1: ISSUANCE PORTAL */}
+//           {activeTab === 'issue' && (
 //             <div>
-//               <div style={{ padding: '1rem', background: '#f4f4f4', borderRadius: '8px', marginBottom: '1.5rem' }}>
-//                 <h3 style={{ color: 'green', margin: 0 }}>✓ University Admin Connected</h3>
-//                 <p style={{ margin: '0.5rem 0 0 0' }}><strong>Address:</strong> {account}</p>
-//               </div>
-
-//               <form onSubmit={handleIssueTranscript} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-//                 <div>
-//                   <label><strong>Student ID or Address:</strong></label>
-//                   <input
-//                     type="text"
-//                     placeholder="STU-12345 or 0x..."
-//                     value={studentAddress}
-//                     onChange={(e) => setStudentAddress(e.target.value)}
-//                     style={{ width: '100%', padding: '0.5rem', marginTop: '0.25rem' }}
-//                     required
-//                   />
+//               {!account ? (
+//                 <div className="text-center py-6">
+//                   <p className="text-slate-400 text-sm mb-4">Please connect your MetaMask wallet to issue transcripts on-chain.</p>
+//                   <button
+//                     onClick={connectWallet}
+//                     className="px-6 py-3 bg-[#FFFFF0] text-[#0F172A] font-bold text-sm rounded-xl hover:bg-slate-200 transition-all"
+//                   >
+//                     Connect MetaMask Wallet
+//                   </button>
 //                 </div>
+//               ) : (
+//                 <form onSubmit={handleIssueTranscript} className="space-y-5">
+//                   <div>
+//                     <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+//                       Student ID or Address:
+//                     </label>
+//                     <input
+//                       type="text"
+//                       placeholder="STU-12345 or 0x..."
+//                       value={studentAddress}
+//                       onChange={(e) => setStudentAddress(e.target.value)}
+//                       className="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+//                       required
+//                     />
+//                   </div>
 
+//                   <div>
+//                     <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+//                       Select Transcript Document (PDF):
+//                     </label>
+//                     <input
+//                       type="file"
+//                       accept="application/pdf"
+//                       onChange={handleFileChange}
+//                       className="w-full bg-slate-800/80 border border-slate-700 rounded-xl p-2.5 text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-700 file:text-cyan-300 hover:file:bg-slate-600 cursor-pointer"
+//                       required
+//                     />
+//                   </div>
+
+//                   {fileHash && (
+//                     <div className="p-3 bg-slate-800/90 border border-slate-700 rounded-xl text-xs space-y-1">
+//                       <span className="text-slate-400 block font-semibold">Computed SHA-256 Hash:</span>
+//                       <span className="font-mono text-cyan-300 break-all">{fileHash}</span>
+//                     </div>
+//                   )}
+
+//                   <button
+//                     type="submit"
+//                     disabled={isLoading}
+//                     className="w-full py-4 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-base rounded-xl transition-all shadow-lg shadow-cyan-500/20 disabled:opacity-50"
+//                   >
+//                     {isLoading ? 'Processing...' : 'Issue Transcript On-Chain'}
+//                   </button>
+
+//                   {status && (
+//                     <div className="p-4 bg-slate-800/90 border border-slate-700 rounded-xl text-xs text-slate-300 space-y-2">
+//                       <p className="font-semibold">{status}</p>
+//                       {ipfsCid && (
+//                         <p className="break-all pt-1 border-t border-slate-700">
+//                           <span className="text-slate-400">IPFS Gateway Link: </span>
+//                           <a
+//                             href={`https://gateway.pinata.cloud/ipfs/${ipfsCid}`}
+//                             target="_blank"
+//                             rel="noreferrer"
+//                             className="text-cyan-300 hover:underline"
+//                           >
+//                             View Document on IPFS
+//                           </a>
+//                         </p>
+//                       )}
+//                     </div>
+//                   )}
+//                 </form>
+//               )}
+//             </div>
+//           )}
+
+//           {/* TAB 2: VERIFICATION PORTAL */}
+//           {activeTab === 'verify' && (
+//             <div>
+//               <form onSubmit={handleVerifyTranscript} className="space-y-5">
 //                 <div>
-//                   <label><strong>Select Transcript Document (PDF):</strong></label>
+//                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+//                     Upload PDF Transcript to Verify:
+//                   </label>
 //                   <input
 //                     type="file"
 //                     accept="application/pdf"
-//                     onChange={handleFileChange}
-//                     style={{ width: '100%', marginTop: '0.25rem' }}
-//                     required
+//                     onChange={handleVerifyFileChange}
+//                     className="w-full bg-slate-800/80 border border-slate-700 rounded-xl p-2.5 text-sm text-slate-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-700 file:text-cyan-300 hover:file:bg-slate-600 cursor-pointer"
 //                   />
 //                 </div>
 
-//                 {fileHash && (
-//                   <div style={{ fontSize: '0.85rem', background: '#eef', padding: '0.5rem', borderRadius: '4px', wordBreak: 'break-all' }}>
-//                     <strong>Computed SHA-256 Hash:</strong> {fileHash}
-//                   </div>
-//                 )}
+//                 <div className="relative flex py-1 items-center">
+//                   <div className="flex-grow border-t border-slate-800"></div>
+//                   <span className="flex-shrink mx-4 text-xs font-semibold uppercase text-slate-500">OR</span>
+//                   <div className="flex-grow border-t border-slate-800"></div>
+//                 </div>
+
+//                 <div>
+//                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+//                     Or Enter SHA-256 Hash Directly:
+//                   </label>
+//                   <input
+//                     type="text"
+//                     placeholder="0x..."
+//                     value={verifyHashInput}
+//                     onChange={(e) => setVerifyHashInput(e.target.value)}
+//                     className="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono"
+//                   />
+//                 </div>
 
 //                 <button
 //                   type="submit"
-//                   disabled={isLoading}
-//                   style={{ padding: '0.75rem', fontSize: '1rem', cursor: 'pointer', background: '#0066cc', color: 'white', border: 'none', borderRadius: '4px' }}
+//                   disabled={isVerifying}
+//                   className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-base rounded-xl transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50"
 //                 >
-//                   {isLoading ? 'Processing...' : 'Issue Transcript On-Chain'}
+//                   {isVerifying ? 'Checking Blockchain...' : 'Verify Transcript'}
 //                 </button>
 //               </form>
 
-//               {status && (
-//                 <div style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid #ccc', borderRadius: '4px' }}>
-//                   <strong>Status:</strong> {status}
-//                   {ipfsCid && (
-//                     <p style={{ margin: '0.5rem 0 0 0', wordBreak: 'break-all' }}>
-//                       <strong>IPFS Gateway Link:</strong>{' '}
-//                       <a href={`https://gateway.pinata.cloud/ipfs/${ipfsCid}`} target="_blank" rel="noreferrer">
-//                         View Document on IPFS
-//                       </a>
-//                     </p>
+//               {/* Verification Results */}
+//               {verifyResult && (
+//                 <div className={`mt-6 p-5 rounded-xl border ${verifyResult.isValid
+//                   ? 'bg-emerald-950/40 border-emerald-500/50 text-emerald-200'
+//                   : 'bg-rose-950/40 border-rose-500/50 text-rose-200'
+//                   }`}>
+//                   {verifyResult.isValid ? (
+//                     <div className="space-y-3">
+//                       <h3 className="text-base font-bold text-emerald-400">✅ Authentic Transcript Verified</h3>
+//                       <div className="space-y-1 text-xs">
+//                         <p><strong>Student ID / Address:</strong> {verifyResult.studentId}</p>
+//                         <p><strong>Issuing University:</strong> {verifyResult.universityName || 'Authorized Institution'}</p>
+//                         <p><strong>Issued Timestamp:</strong> {verifyResult.timestamp}</p>
+//                         <p className="break-all">
+//                           <strong>IPFS Document CID:</strong>{' '}
+//                           <a href={`https://gateway.pinata.cloud/ipfs/${verifyResult.ipfsCID}`} target="_blank" rel="noreferrer" className="text-cyan-300 underline">
+//                             {verifyResult.ipfsCID}
+//                           </a>
+//                         </p>
+//                       </div>
+//                     </div>
+//                   ) : (
+//                     <div className="space-y-1">
+//                       <h3 className="text-base font-bold text-rose-400">❌ Record Not Found / Tampered Document</h3>
+//                       <p className="text-xs text-rose-300/80">This SHA-256 hash does not exist in the Academic Registry. Either the file has been altered or it was never issued by an authorized university.</p>
+//                     </div>
 //                   )}
 //                 </div>
 //               )}
 //             </div>
 //           )}
 //         </div>
-//       )}
+//       </main>
 
-//       {/* TAB 2: VERIFICATION PORTAL */}
-//       {activeTab === 'verify' && (
-//         <div>
-//           <form onSubmit={handleVerifyTranscript} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-//             <div>
-//               <label><strong>Upload PDF Transcript to Verify:</strong></label>
-//               <input
-//                 type="file"
-//                 accept="application/pdf"
-//                 onChange={handleVerifyFileChange}
-//                 style={{ width: '100%', marginTop: '0.25rem' }}
-//               />
-//             </div>
-
-//             <div>
-//               <label><strong>Or Enter SHA-256 Hash Directly:</strong></label>
-//               <input
-//                 type="text"
-//                 placeholder="0x..."
-//                 value={verifyHashInput}
-//                 onChange={(e) => setVerifyHashInput(e.target.value)}
-//                 style={{ width: '100%', padding: '0.5rem', marginTop: '0.25rem' }}
-//               />
-//             </div>
-
-//             <button
-//               type="submit"
-//               disabled={isVerifying}
-//               style={{ padding: '0.75rem', fontSize: '1rem', cursor: 'pointer', background: '#28a745', color: 'white', border: 'none', borderRadius: '4px' }}
-//             >
-//               {isVerifying ? 'Checking Blockchain...' : 'Verify Transcript'}
-//             </button>
-//           </form>
-
-//           {/* Verification Results Output */}
-//           {verifyResult && (
-//             <div style={{ marginTop: '1.5rem', padding: '1rem', borderRadius: '6px', background: verifyResult.isValid ? '#d4edda' : '#f8d7da', border: `1px solid ${verifyResult.isValid ? '#c3e6cb' : '#f5c6cb'}` }}>
-//               {verifyResult.isValid ? (
-//                 <div>
-//                   <h3 style={{ color: '#155724', margin: '0 0 0.5rem 0' }}>✅ Authentic Transcript Verified</h3>
-//                   <p><strong>Student ID / Address:</strong> {verifyResult.studentId}</p>
-//                   <p><strong>Issuing University:</strong> {verifyResult.universityName || 'Authorized Institution'}</p>
-//                   <p><strong>Issued Timestamp:</strong> {verifyResult.timestamp}</p>
-//                   <p style={{ wordBreak: 'break-all' }}>
-//                     <strong>IPFS Document CID:</strong>{' '}
-//                     <a href={`https://gateway.pinata.cloud/ipfs/${verifyResult.ipfsCID}`} target="_blank" rel="noreferrer">
-//                       {verifyResult.ipfsCID}
-//                     </a>
-//                   </p>
-//                 </div>
-//               ) : (
-//                 <div>
-//                   <h3 style={{ color: '#721c24', margin: '0 0 0.5rem 0' }}>❌ Record Not Found / Tampered Document</h3>
-//                   <p style={{ color: '#721c24', margin: 0 }}>This SHA-256 hash does not exist in the Academic Registry. Either the file has been altered or it was never issued by an authorized university.</p>
-//                 </div>
-//               )}
-//             </div>
-//           )}
-//         </div>
-//       )}
+//       <footer className="py-6 text-center text-xs text-slate-500">
+//         VaultScript Decentralized Academic Registry
+//       </footer>
 //     </div>
 //   );
 // }
